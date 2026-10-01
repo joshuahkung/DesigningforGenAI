@@ -12,7 +12,11 @@ export default function SignInButton({ label = "Continue with Google" }: { label
     await supabase.auth.signInWithOAuth({
       provider: "google",
       // Exactly /auth/callback — no extra path or query params.
-      options: { redirectTo: `${window.location.origin}/auth/callback` },
+      options: {
+        redirectTo: `${window.location.origin}/auth/callback`,
+        // Always show Google's account chooser, so signing out really lets you switch accounts.
+        queryParams: { prompt: "select_account" },
+      },
     });
   }
 
