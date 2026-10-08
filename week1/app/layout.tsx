@@ -16,7 +16,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "Captions",
-  description: "COMS6998 Designing for GenAI — caption app",
+  description: "Post a photo, get three AI-written captions, and vote on which ones are actually funny.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
@@ -28,7 +28,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       <body className="min-h-full flex flex-col font-sans">
         <NavBar />
         <div className="flex flex-1 flex-col">{children}</div>
-        <footer className="mx-auto flex w-full max-w-3xl gap-4 px-4 py-6 text-xs text-neutral-500">
+        <footer className="mx-auto flex w-full max-w-5xl gap-4 px-4 py-6 text-xs text-neutral-500">
           <Link href="/privacy" className="hover:underline">Privacy</Link>
           <Link href="/terms" className="hover:underline">Terms</Link>
         </footer>

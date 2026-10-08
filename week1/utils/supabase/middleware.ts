@@ -5,7 +5,7 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
 
 // Routes that require a logged-in user.
-const PROTECTED_PREFIXES = ["/captions", "/profile", "/welcome"];
+const PROTECTED_PREFIXES = ["/captions", "/create", "/top", "/profile", "/welcome"];
 
 /**
  * Runs on every request (via proxy.ts): refreshes the Supabase session cookie

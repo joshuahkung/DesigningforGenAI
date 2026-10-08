@@ -3,11 +3,23 @@
 :root {
   --background: #ffffff;
   --foreground: #171717;
+
+  /* Wayfinding colors, borrowed from subway signage: a black sign strip and round colored bullets. */
+  --sign: #000000;
+  --up: #00853e;
+  --down: #d42a23;
+  --skip: #6e7177;
+
+  --nav-h: 3.25rem;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-sign: var(--sign);
+  --color-up: var(--up);
+  --color-down: var(--down);
+  --color-skip: var(--skip);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
@@ -16,6 +28,7 @@
   :root {
     --background: #0a0a0a;
     --foreground: #ededed;
+    --skip: #8b8e94;
   }
 }
 
@@ -23,4 +36,25 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+}
+
+/* Vote card: the card you just judged leaves in the direction you sent it. */
+@keyframes card-out-right {
+  from { transform: translateX(var(--from-x, 0px)) rotate(calc(var(--from-x, 0px) / 24px * 1deg)); opacity: 1; }
+  to   { transform: translateX(130%) rotate(14deg); opacity: 0; }
+}
+@keyframes card-out-left {
+  from { transform: translateX(var(--from-x, 0px)) rotate(calc(var(--from-x, 0px) / 24px * 1deg)); opacity: 1; }
+  to   { transform: translateX(-130%) rotate(-14deg); opacity: 0; }
+}
+@keyframes card-out-down {
+  from { transform: translateY(0) scale(1); opacity: 1; }
+  to   { transform: translateY(18%) scale(0.92); opacity: 0; }
+}
+.card-out-right { animation: card-out-right 240ms ease-in forwards; }
+.card-out-left  { animation: card-out-left 240ms ease-in forwards; }
+.card-out-down  { animation: card-out-down 200ms ease-in forwards; }
+
+@media (prefers-reduced-motion: reduce) {
+  .card-out-right, .card-out-left, .card-out-down { animation-duration: 1ms; }
 }

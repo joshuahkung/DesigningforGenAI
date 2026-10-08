@@ -12,7 +12,7 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
       <span className="mb-4 text-3xl" aria-hidden>🔒</span>
       <h1 className="mb-2 text-2xl font-semibold">Sign in to continue</h1>
       <p className="mb-8 text-sm text-neutral-600 dark:text-neutral-400">
-        The caption feed is only visible to signed-in users.
+        Voting on captions and posting photos is for signed-in users only.
       </p>
       <SignInButton />
       {error && <p className="mt-6 text-sm text-red-600">Sign-in failed ({String(error)}). Try again.</p>}
