@@ -1,40 +1,58 @@
 "use server";
 
+import { createHmac, timingSafeEqual } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { CAPTION_BUCKET, DAILY_UPLOAD_LIMIT, countRecentUploads } from "@/lib/captions";
 import { CAPTION_PROMPT, writeCaptions } from "@/lib/gemini";
 import { getSupabase } from "@/lib/profile";
 
-export type GenerateResult =
-  | { ok: true; imageUrl: string; captions: { id: number; content: string }[]; uploadsLeft: number }
-  | { ok: false; error: string };
+/**
+ * Posting is two steps so people can check their photo before anything is saved:
+ *   1. draftCaptions: the AI writes captions. Nothing goes into the database.
+ *   2. publishPost:   the user keeps the captions they want, and only then are the image and captions saved.
+ *
+ * Between the two steps the draft lives in the browser. The server signs it, so publishPost
+ * only accepts captions the AI actually wrote for this user's photo.
+ */
+
+export type Draft = { path: string; imageUrl: string; captions: string[]; model: string; expires: number; token: string };
+export type DraftResult = { ok: true; draft: Draft } | { ok: false; error: string };
+export type PublishResult = { ok: true; captions: { id: number; content: string }[]; uploadsLeft: number } | { ok: false; error: string };
 
 const MAX_BYTES = 5 * 1024 * 1024;
 const ALLOWED_TYPES = ["image/jpeg", "image/png", "image/webp"];
+const DRAFT_TTL_MS = 60 * 60 * 1000; // a draft can be posted for up to an hour
 
-/**
- * The browser has already uploaded the photo to Storage at `path`.
- * This reads it back, asks Gemini for captions, and saves the image row and the captions
- * (each with the prompt and model that wrote it) so everyone can vote on them.
- */
-export async function generateCaptions(path: string): Promise<GenerateResult> {
+function sign(userId: string, d: Omit<Draft, "token">): string {
+  const secret = process.env.DRAFT_SECRET || process.env.GEMINI_API_KEY || "";
+  return createHmac("sha256", `draft:${secret}`)
+    .update(JSON.stringify([userId, d.path, d.imageUrl, d.captions, d.model, d.expires]))
+    .digest("hex");
+}
+
+function validSignature(userId: string, d: Draft): boolean {
+  const expected = Buffer.from(sign(userId, d), "hex");
+  const given = Buffer.from(typeof d.token === "string" ? d.token : "", "hex");
+  return expected.length === given.length && timingSafeEqual(expected, given);
+}
+
+/** Step 1. The browser has already uploaded the photo to Storage at `path`. Ask the AI for captions; save nothing. */
+export async function draftCaptions(path: string): Promise<DraftResult> {
   const supabase = await getSupabase();
   const {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return { ok: false, error: "Sign in to make captions." };
 
-  // Only a file in this user's own folder. RLS checks the same thing on insert.
+  // Only a file in this user's own folder.
   if (typeof path !== "string" || !new RegExp(`^${user.id}/[0-9a-f-]{36}\\.(jpg|png|webp)$`).test(path)) {
     return { ok: false, error: "That upload didn't go through. Choose the photo again." };
   }
 
-  const used = await countRecentUploads(user.id);
-  if (used >= DAILY_UPLOAD_LIMIT) {
+  if ((await countRecentUploads(user.id)) >= DAILY_UPLOAD_LIMIT) {
     return { ok: false, error: `You've posted ${DAILY_UPLOAD_LIMIT} photos in the last 24 hours. Come back tomorrow for more.` };
   }
 
-  // Read the photo back from Storage.
   const imageUrl = supabase.storage.from(CAPTION_BUCKET).getPublicUrl(path).data.publicUrl;
   let bytes: ArrayBuffer;
   let mimeType: string;
@@ -52,19 +70,48 @@ export async function generateCaptions(path: string): Promise<GenerateResult> {
   const result = await writeCaptions({ base64: Buffer.from(bytes).toString("base64"), mimeType });
   if (!result.ok) return result;
 
-  // Save the image, then its captions. user_id is filled in by the database from the session.
+  const unsigned = { path, imageUrl, captions: result.captions, model: result.model, expires: Date.now() + DRAFT_TTL_MS };
+  return { ok: true, draft: { ...unsigned, token: sign(user.id, unsigned) } };
+}
+
+/** Step 2. Save the photo and the captions the user kept (by their position in the draft). */
+export async function publishPost(draft: Draft, keep: number[]): Promise<PublishResult> {
+  const supabase = await getSupabase();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "You've been signed out. Sign in and try again." };
+
+  if (!draft || !Array.isArray(draft.captions) || !validSignature(user.id, draft)) {
+    return { ok: false, error: "This draft couldn't be verified. Choose the photo again." };
+  }
+  if (Date.now() > draft.expires) return { ok: false, error: "This draft is over an hour old. Choose the photo again." };
+
+  const picked = [...new Set(Array.isArray(keep) ? keep : [])]
+    .filter((i) => Number.isInteger(i) && i >= 0 && i < draft.captions.length)
+    .sort((a, b) => a - b)
+    .map((i) => draft.captions[i]);
+  if (!picked.length) return { ok: false, error: "Keep at least one caption to post." };
+
+  const used = await countRecentUploads(user.id);
+  if (used >= DAILY_UPLOAD_LIMIT) {
+    return { ok: false, error: `You've posted ${DAILY_UPLOAD_LIMIT} photos in the last 24 hours. Come back tomorrow for more.` };
+  }
+
+  // user_id is filled in by the database from the session.
   const { data: image, error: imageError } = await supabase
     .from("images")
-    .insert({ storage_path: path, url: imageUrl })
+    .insert({ storage_path: draft.path, url: draft.imageUrl })
     .select("id")
     .single();
   if (imageError || !image) {
-    return { ok: false, error: `Couldn't save the photo: ${imageError?.message ?? "unknown error"}` };
+    const already = imageError?.code === "23505";
+    return { ok: false, error: already ? "This photo is already posted." : `Couldn't save the photo: ${imageError?.message ?? "unknown error"}` };
   }
 
   const { data: captions, error: captionError } = await supabase
     .from("captions")
-    .insert(result.captions.map((content) => ({ image_id: image.id, content, prompt: CAPTION_PROMPT, model: result.model })))
+    .insert(picked.map((content) => ({ image_id: image.id, content, prompt: CAPTION_PROMPT, model: draft.model })))
     .select("id, content")
     .order("id");
   if (captionError || !captions?.length) {
@@ -72,5 +119,5 @@ export async function generateCaptions(path: string): Promise<GenerateResult> {
   }
 
   revalidatePath("/create");
-  return { ok: true, imageUrl, captions, uploadsLeft: Math.max(DAILY_UPLOAD_LIMIT - used - 1, 0) };
+  return { ok: true, captions, uploadsLeft: Math.max(DAILY_UPLOAD_LIMIT - used - 1, 0) };
 }

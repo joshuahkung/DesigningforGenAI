@@ -2,18 +2,20 @@
 
 /* eslint-disable @next/next/no-img-element */
 import Link from "next/link";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createClient } from "@/utils/supabase/client";
-import { generateCaptions } from "./actions";
+import { draftCaptions, publishPost, type Draft } from "./actions";
 
 type Props = { userId: string; bucket: string; uploadsLeft: number; dailyLimit: number };
 type Stage =
   | { name: "idle" }
-  | { name: "chosen"; blob: Blob; preview: string }
-  | { name: "working"; preview: string; step: "Uploading your photo…" | "Writing captions…" }
+  | { name: "chosen"; blob: Blob; preview: string; path?: string }
+  | { name: "working"; preview: string; step: string }
+  | { name: "review"; preview: string; draft: Draft; keep: boolean[]; posting: boolean }
   | { name: "done"; preview: string; captions: { id: number; content: string }[] };
 
 const MAX_EDGE = 1600; // px. Phone photos are far bigger than the feed or the AI needs.
+const MAX_REDOS = 2; // "New captions" presses per photo, to stay inside the free AI limit
 
 /** Shrink the photo in the browser and re-encode it as a JPG before it is uploaded. */
 async function prepare(file: File): Promise<Blob> {
@@ -33,64 +35,137 @@ async function prepare(file: File): Promise<Blob> {
   );
 }
 
+async function askAI(path: string): Promise<Awaited<ReturnType<typeof draftCaptions>>> {
+  try {
+    return await draftCaptions(path);
+  } catch {
+    return { ok: false, error: "Something went wrong while writing captions. Try again." };
+  }
+}
+
+function Check({ on }: { on: boolean }) {
+  return (
+    <span
+      aria-hidden
+      className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md transition-colors ${
+        on ? "bg-neutral-900 text-white dark:bg-white dark:text-neutral-900" : "border-2 border-black/25 dark:border-white/30"
+      }`}
+    >
+      {on && (
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M5 12.5l4.5 4.5L19 7.5" />
+        </svg>
+      )}
+    </span>
+  );
+}
+
 export default function CreateForm({ userId, bucket, uploadsLeft, dailyLimit }: Props) {
   const [stage, setStage] = useState<Stage>({ name: "idle" });
   const [left, setLeft] = useState(uploadsLeft);
+  const [redos, setRedos] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  // Warn before leaving the page with a draft that hasn't been posted.
+  const unsaved = stage.name === "review";
+  useEffect(() => {
+    if (!unsaved) return;
+    const warn = (e: BeforeUnloadEvent) => e.preventDefault();
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [unsaved]);
+
+  /** Upload the photo (unless it already is), then have the AI write a draft. Nothing is saved to the feed. */
+  async function write(blob: Blob, preview: string, existingPath?: string) {
+    setError(null);
+    let path = existingPath;
+    if (!path) {
+      setStage({ name: "working", preview, step: "Uploading your photo…" });
+      path = `${userId}/${crypto.randomUUID()}.jpg`;
+      const { error: uploadError } = await createClient()
+        .storage.from(bucket)
+        .upload(path, blob, { contentType: "image/jpeg", cacheControl: "31536000" });
+      if (uploadError) {
+        setError(`Upload failed: ${uploadError.message}`);
+        setStage({ name: "chosen", blob, preview });
+        return;
+      }
+    }
+    setStage({ name: "working", preview, step: "Writing captions…" });
+    const result = await askAI(path);
+    if (!result.ok) {
+      setError(result.error);
+      setStage({ name: "chosen", blob, preview, path });
+      return;
+    }
+    setRedos(0);
+    setStage({ name: "review", preview, draft: result.draft, keep: result.draft.captions.map(() => true), posting: false });
+  }
 
   async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     e.target.value = ""; // so choosing the same file again still fires
     if (!file) return;
     setError(null);
+    let blob: Blob;
     try {
-      const blob = await prepare(file);
-      setStage({ name: "chosen", blob, preview: URL.createObjectURL(blob) });
+      blob = await prepare(file);
     } catch {
       setError("Couldn't open that file. Use a JPG, PNG, or WebP photo.");
-    }
-  }
-
-  async function submit() {
-    if (stage.name !== "chosen") return;
-    const { blob, preview } = stage;
-    setError(null);
-    setStage({ name: "working", preview, step: "Uploading your photo…" });
-
-    // 1. The photo goes straight from the browser to Supabase Storage, into this user's own folder.
-    const path = `${userId}/${crypto.randomUUID()}.jpg`;
-    const supabase = createClient();
-    const { error: uploadError } = await supabase.storage
-      .from(bucket)
-      .upload(path, blob, { contentType: "image/jpeg", cacheControl: "31536000" });
-    if (uploadError) {
-      setError(`Upload failed: ${uploadError.message}`);
-      setStage({ name: "chosen", blob, preview });
       return;
     }
+    // Choosing a photo goes straight to the AI. The review screen is where you confirm it.
+    write(blob, URL.createObjectURL(blob));
+  }
 
-    // 2. The server sends it to the AI and saves the captions.
-    setStage({ name: "working", preview, step: "Writing captions…" });
-    let result: Awaited<ReturnType<typeof generateCaptions>>;
+  async function redo() {
+    if (stage.name !== "review" || redos >= MAX_REDOS) return;
+    const before = stage;
+    setError(null);
+    setStage({ name: "working", preview: before.preview, step: "Writing new captions…" });
+    const result = await askAI(before.draft.path);
+    if (!result.ok) {
+      setError(result.error);
+      setStage(before);
+      return;
+    }
+    setRedos((n) => n + 1);
+    setStage({ ...before, draft: result.draft, keep: result.draft.captions.map(() => true) });
+  }
+
+  function toggle(i: number) {
+    if (stage.name !== "review" || stage.posting) return;
+    setStage({ ...stage, keep: stage.keep.map((k, j) => (j === i ? !k : k)) });
+  }
+
+  async function post() {
+    if (stage.name !== "review") return;
+    const keep = stage.keep.flatMap((k, i) => (k ? [i] : []));
+    if (!keep.length) return;
+    setError(null);
+    setStage({ ...stage, posting: true });
+    let result: Awaited<ReturnType<typeof publishPost>>;
     try {
-      result = await generateCaptions(path);
+      result = await publishPost(stage.draft, keep);
     } catch {
-      result = { ok: false, error: "Something went wrong while writing captions. Try again." };
+      result = { ok: false, error: "Couldn't post. Check your connection and try again." };
     }
     if (!result.ok) {
       setError(result.error);
-      setStage({ name: "chosen", blob, preview });
+      setStage({ ...stage, posting: false });
       return;
     }
     setLeft(result.uploadsLeft);
-    setStage({ name: "done", preview, captions: result.captions });
+    setStage({ name: "done", preview: stage.preview, captions: result.captions });
   }
 
   const picker = <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp" onChange={onFile} className="hidden" />;
   const choose = () => fileRef.current?.click();
   const primary = "rounded-full bg-neutral-900 px-5 py-2.5 text-sm font-medium text-white disabled:opacity-50 dark:bg-white dark:text-neutral-900";
-  const secondary = "rounded-full border border-black/15 px-5 py-2.5 text-sm font-medium disabled:opacity-50 dark:border-white/20";
+  const go = "rounded-full bg-up px-5 py-2.5 text-sm font-semibold text-white disabled:opacity-40";
+  const secondary = "rounded-full border border-black/15 px-5 py-2.5 text-sm font-medium disabled:opacity-40 dark:border-white/20";
+  const errorLine = error && <p role="alert" className="mt-3 text-sm text-red-600">{error}</p>;
 
   if (stage.name === "idle") {
     return (
@@ -103,18 +178,79 @@ export default function CreateForm({ userId, bucket, uploadsLeft, dailyLimit }: 
           className="flex w-full flex-col items-center gap-2 rounded-2xl border-2 border-dashed border-black/25 px-6 py-14 text-center transition-colors enabled:hover:border-black/60 enabled:hover:bg-black/[0.03] disabled:opacity-50 dark:border-white/25 dark:enabled:hover:border-white/60 dark:enabled:hover:bg-white/[0.04]"
         >
           <span className="text-lg font-semibold">Choose a photo</span>
-          <span className="text-sm text-neutral-500">JPG, PNG, or WebP</span>
+          <span className="text-sm text-neutral-500">JPG, PNG, or WebP. You&apos;ll check it before anything is posted.</span>
         </button>
         <p className="mt-3 text-sm text-neutral-500">
           {left > 0
-            ? `${left} of ${dailyLimit} photos left today. Everyone who is signed in will see your photo.`
+            ? `${left} of ${dailyLimit} photos left today.`
             : `You've posted ${dailyLimit} photos in the last 24 hours. Come back tomorrow for more.`}
         </p>
-        {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
+        {errorLine}
       </div>
     );
   }
 
+  if (stage.name === "review") {
+    const kept = stage.keep.filter(Boolean).length;
+    const redosLeft = MAX_REDOS - redos;
+    return (
+      <div>
+        {picker}
+        <span className="mb-2 inline-block rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-bold tracking-wide text-amber-900 dark:bg-amber-400/20 dark:text-amber-200">
+          NOT POSTED YET
+        </span>
+        <h2 className="text-2xl font-bold tracking-tight">Is this the right photo?</h2>
+        <p className="mb-4 text-sm text-neutral-600 dark:text-neutral-400">Uncheck any caption you don&apos;t want posted.</p>
+
+        <div className="overflow-hidden rounded-2xl border border-black/15 dark:border-white/15">
+          <div className="bg-neutral-900">
+            <img src={stage.preview} alt="The photo you chose" className="mx-auto max-h-[22rem] w-auto object-contain" />
+          </div>
+          <ul className="divide-y divide-black/10 dark:divide-white/10">
+            {stage.draft.captions.map((caption, i) => {
+              const on = stage.keep[i];
+              return (
+                <li key={`${stage.draft.token}-${i}`}>
+                  <label className={`flex cursor-pointer items-start gap-3 px-4 py-3.5 transition-colors hover:bg-black/[0.03] dark:hover:bg-white/[0.04] ${stage.posting ? "pointer-events-none" : ""}`}>
+                    <input type="checkbox" checked={on} onChange={() => toggle(i)} className="peer sr-only" />
+                    <span className="rounded-md peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-foreground">
+                      <Check on={on} />
+                    </span>
+                    <span className={`text-base font-semibold leading-snug tracking-tight ${on ? "" : "text-neutral-400 line-through"}`}>{caption}</span>
+                  </label>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+
+        <div className="mt-4 flex flex-wrap gap-2.5">
+          <button type="button" onClick={post} disabled={!kept || stage.posting} className={`${go} w-full sm:w-auto`}>
+            {stage.posting ? "Posting…" : kept ? `Post ${kept === 1 ? "1 caption" : `${kept} captions`}` : "Keep at least one"}
+          </button>
+          <button
+            type="button"
+            onClick={redo}
+            disabled={stage.posting || redosLeft <= 0}
+            title={redosLeft > 0 ? `${redosLeft} left for this photo` : "No more new captions for this photo"}
+            className={`${secondary} flex-1 sm:flex-none`}
+          >
+            New captions
+          </button>
+          <button type="button" onClick={choose} disabled={stage.posting} className={`${secondary} flex-1 sm:flex-none`}>
+            Wrong photo
+          </button>
+        </div>
+        <p className="mt-3 text-sm text-neutral-500">
+          Nothing is saved until you post.{" "}
+          {redosLeft > 0 ? `You can ask for new captions ${redosLeft === 1 ? "once more" : `${redosLeft} more times`}.` : "That's the last set of new captions for this photo."}
+        </p>
+        {errorLine}
+      </div>
+    );
+  }
+
+  // chosen (after an error), working, done
   return (
     <div>
       {picker}
@@ -140,27 +276,22 @@ export default function CreateForm({ userId, bucket, uploadsLeft, dailyLimit }: 
       </div>
 
       {stage.name === "chosen" && (
-        <>
-          <div className="mt-4 flex flex-wrap gap-3">
-            <button type="button" onClick={submit} className={primary}>
-              Write captions for this photo
-            </button>
-            <button type="button" onClick={choose} className={secondary}>
-              Choose a different photo
-            </button>
-          </div>
-          <p className="mt-3 text-sm text-neutral-500">
-            Posting shows this photo to everyone who is signed in. It can&apos;t be edited afterwards.
-          </p>
-        </>
+        <div className="mt-4 flex flex-wrap gap-3">
+          <button type="button" onClick={() => write(stage.blob, stage.preview, stage.path)} className={primary}>
+            Try again
+          </button>
+          <button type="button" onClick={choose} className={secondary}>
+            Choose a different photo
+          </button>
+        </div>
       )}
 
-      {stage.name === "working" && <p className="mt-4 text-sm text-neutral-500">This takes about ten seconds.</p>}
+      {stage.name === "working" && <p className="mt-4 text-sm text-neutral-500">This takes about ten seconds. Nothing is posted yet.</p>}
 
       {stage.name === "done" && (
         <>
           <p className="mt-4 text-sm text-neutral-600 dark:text-neutral-400">
-            Posted. These {stage.captions.length} captions are now in everyone&apos;s feed, including yours.
+            Posted. {stage.captions.length === 1 ? "This caption is" : `These ${stage.captions.length} captions are`} now in everyone&apos;s feed.
           </p>
           <div className="mt-3 flex flex-wrap gap-3">
             <Link href="/captions" className={primary}>
@@ -176,7 +307,7 @@ export default function CreateForm({ userId, bucket, uploadsLeft, dailyLimit }: 
         </>
       )}
 
-      {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
+      {errorLine}
     </div>
   );
 }
