@@ -4,7 +4,7 @@ export default function PrivacyPage() {
   return (
     <main className="mx-auto w-full max-w-2xl space-y-4 px-4 py-10 text-sm leading-6">
       <h1 className="text-3xl font-bold">Privacy Policy</h1>
-      <p className="text-neutral-500">Last updated October 7, 2026</p>
+      <p className="text-neutral-500">Last updated October 15, 2026</p>
       <p>
         Captions is a student project built for COMS6998 (Designing for GenAI) at Columbia University. It is not a
         commercial product.
@@ -24,7 +24,10 @@ export default function PrivacyPage() {
       <h2 className="pt-2 text-lg font-semibold">Where it lives</h2>
       <p>Data is stored with Supabase (database and file storage) and the app is hosted on Vercel.</p>
       <h2 className="pt-2 text-lg font-semibold">Deleting your data</h2>
-      <p>Contact the developer via joshuakung.com and we will delete your account, profile, photos, and votes.</p>
+      <p>
+        You can delete any photo you posted, along with its captions and their votes, from the Mine tab. To delete your
+        whole account and profile, contact the developer via joshuakung.com.
+      </p>
     </main>
   );
 }

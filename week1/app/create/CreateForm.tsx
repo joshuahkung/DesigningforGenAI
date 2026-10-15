@@ -3,10 +3,12 @@
 /* eslint-disable @next/next/no-img-element */
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
+import { STYLES, type Style } from "@/lib/styles";
 import { createClient } from "@/utils/supabase/client";
-import { draftCaptions, publishPost, type Draft } from "./actions";
+import { discardDraft, draftCaptions, publishPost, type Draft } from "./actions";
+import UsageNote from "./UsageNote";
 
-type Props = { userId: string; bucket: string; uploadsLeft: number; dailyLimit: number };
+type Props = { userId: string; bucket: string; used: number; nextFreeAt: string | null; dailyLimit: number };
 type Stage =
   | { name: "idle" }
   | { name: "chosen"; blob: Blob; preview: string; path?: string }
@@ -15,7 +17,8 @@ type Stage =
   | { name: "done"; preview: string; captions: { id: number; content: string }[] };
 
 const MAX_EDGE = 1600; // px. Phone photos are far bigger than the feed or the AI needs.
-const MAX_REDOS = 2; // "New captions" presses per photo, to stay inside the free AI limit
+const MAX_REDOS = 3; // "New captions" presses per photo (also enforced in the database)
+const STYLE_KEYS = Object.keys(STYLES) as Style[];
 
 /** Shrink the photo in the browser and re-encode it as a JPG before it is uploaded. */
 async function prepare(file: File): Promise<Blob> {
@@ -35,9 +38,9 @@ async function prepare(file: File): Promise<Blob> {
   );
 }
 
-async function askAI(path: string): Promise<Awaited<ReturnType<typeof draftCaptions>>> {
+async function askAI(path: string, style: Style): Promise<Awaited<ReturnType<typeof draftCaptions>>> {
   try {
-    return await draftCaptions(path);
+    return await draftCaptions(path, style);
   } catch {
     return { ok: false, error: "Something went wrong while writing captions. Try again." };
   }
@@ -60,12 +63,41 @@ function Check({ on }: { on: boolean }) {
   );
 }
 
-export default function CreateForm({ userId, bucket, uploadsLeft, dailyLimit }: Props) {
+function StylePicker({ value, onChange, disabled }: { value: Style; onChange: (s: Style) => void; disabled?: boolean }) {
+  return (
+    <div role="radiogroup" aria-label="Caption style" className="flex flex-wrap gap-2">
+      {STYLE_KEYS.map((key) => {
+        const on = key === value;
+        return (
+          <button
+            key={key}
+            type="button"
+            role="radio"
+            aria-checked={on}
+            disabled={disabled}
+            onClick={() => onChange(key)}
+            className={`rounded-full border px-3.5 py-1.5 text-sm font-medium transition-colors disabled:opacity-50 ${
+              on
+                ? "border-neutral-900 bg-neutral-900 text-white dark:border-white dark:bg-white dark:text-neutral-900"
+                : "border-black/15 hover:border-black/40 dark:border-white/20 dark:hover:border-white/50"
+            }`}
+          >
+            {STYLES[key].label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+export default function CreateForm({ userId, bucket, used: initialUsed, nextFreeAt: initialNextFree, dailyLimit }: Props) {
   const [stage, setStage] = useState<Stage>({ name: "idle" });
-  const [left, setLeft] = useState(uploadsLeft);
+  const [usage, setUsage] = useState({ used: initialUsed, nextFreeAt: initialNextFree });
+  const [style, setStyle] = useState<Style>("mixed");
   const [redos, setRedos] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const left = Math.max(dailyLimit - usage.used, 0);
 
   // Warn before leaving the page with a draft that hasn't been posted.
   const unsaved = stage.name === "review";
@@ -76,7 +108,7 @@ export default function CreateForm({ userId, bucket, uploadsLeft, dailyLimit }: 
     return () => window.removeEventListener("beforeunload", warn);
   }, [unsaved]);
 
-  /** Upload the photo (unless it already is), then have the AI write a draft. Nothing is saved to the feed. */
+  /** Upload the photo (unless it already is), then have the AI write a draft. Nothing is posted. */
   async function write(blob: Blob, preview: string, existingPath?: string) {
     setError(null);
     let path = existingPath;
@@ -92,13 +124,14 @@ export default function CreateForm({ userId, bucket, uploadsLeft, dailyLimit }: 
         return;
       }
     }
-    setStage({ name: "working", preview, step: "Writing captions…" });
-    const result = await askAI(path);
+    setStage({ name: "working", preview, step: `Writing ${style === "mixed" ? "" : `${STYLES[style].label.toLowerCase()} `}captions…` });
+    const result = await askAI(path, style);
     if (!result.ok) {
       setError(result.error);
       setStage({ name: "chosen", blob, preview, path });
       return;
     }
+    setUsage({ used: result.used, nextFreeAt: result.nextFreeAt });
     setRedos(0);
     setStage({ name: "review", preview, draft: result.draft, keep: result.draft.captions.map(() => true), posting: false });
   }
@@ -115,6 +148,8 @@ export default function CreateForm({ userId, bucket, uploadsLeft, dailyLimit }: 
       setError("Couldn't open that file. Use a JPG, PNG, or WebP photo.");
       return;
     }
+    // Replacing an unposted draft ("Wrong photo"): throw the old file away.
+    if (stage.name === "review") discardDraft(stage.draft.path).catch(() => {});
     // Choosing a photo goes straight to the AI. The review screen is where you confirm it.
     write(blob, URL.createObjectURL(blob));
   }
@@ -123,8 +158,8 @@ export default function CreateForm({ userId, bucket, uploadsLeft, dailyLimit }: 
     if (stage.name !== "review" || redos >= MAX_REDOS) return;
     const before = stage;
     setError(null);
-    setStage({ name: "working", preview: before.preview, step: "Writing new captions…" });
-    const result = await askAI(before.draft.path);
+    setStage({ name: "working", preview: before.preview, step: `Writing new ${style === "mixed" ? "" : `${STYLES[style].label.toLowerCase()} `}captions…` });
+    const result = await askAI(before.draft.path, style);
     if (!result.ok) {
       setError(result.error);
       setStage(before);
@@ -156,7 +191,6 @@ export default function CreateForm({ userId, bucket, uploadsLeft, dailyLimit }: 
       setStage({ ...stage, posting: false });
       return;
     }
-    setLeft(result.uploadsLeft);
     setStage({ name: "done", preview: stage.preview, captions: result.captions });
   }
 
@@ -166,25 +200,25 @@ export default function CreateForm({ userId, bucket, uploadsLeft, dailyLimit }: 
   const go = "rounded-full bg-up px-5 py-2.5 text-sm font-semibold text-white disabled:opacity-40";
   const secondary = "rounded-full border border-black/15 px-5 py-2.5 text-sm font-medium disabled:opacity-40 dark:border-white/20";
   const errorLine = error && <p role="alert" className="mt-3 text-sm text-red-600">{error}</p>;
+  const usageNote = <UsageNote used={usage.used} limit={dailyLimit} nextFreeAt={usage.nextFreeAt} />;
+  const styleLabel = style === "mixed" ? "" : `${STYLES[style].label.toLowerCase()} `;
 
   if (stage.name === "idle") {
     return (
       <div>
         {picker}
+        <p className="mb-2 text-sm font-semibold">Caption style</p>
+        <StylePicker value={style} onChange={setStyle} />
         <button
           type="button"
           onClick={choose}
           disabled={left <= 0}
-          className="flex w-full flex-col items-center gap-2 rounded-2xl border-2 border-dashed border-black/25 px-6 py-14 text-center transition-colors enabled:hover:border-black/60 enabled:hover:bg-black/[0.03] disabled:opacity-50 dark:border-white/25 dark:enabled:hover:border-white/60 dark:enabled:hover:bg-white/[0.04]"
+          className="mt-4 flex w-full flex-col items-center gap-2 rounded-2xl border-2 border-dashed border-black/25 px-6 py-14 text-center transition-colors enabled:hover:border-black/60 enabled:hover:bg-black/[0.03] disabled:opacity-50 dark:border-white/25 dark:enabled:hover:border-white/60 dark:enabled:hover:bg-white/[0.04]"
         >
           <span className="text-lg font-semibold">Choose a photo</span>
           <span className="text-sm text-neutral-500">JPG, PNG, or WebP. You&apos;ll check it before anything is posted.</span>
         </button>
-        <p className="mt-3 text-sm text-neutral-500">
-          {left > 0
-            ? `${left} of ${dailyLimit} photos left today.`
-            : `You've posted ${dailyLimit} photos in the last 24 hours. Come back tomorrow for more.`}
-        </p>
+        {usageNote}
         {errorLine}
       </div>
     );
@@ -193,6 +227,7 @@ export default function CreateForm({ userId, bucket, uploadsLeft, dailyLimit }: 
   if (stage.name === "review") {
     const kept = stage.keep.filter(Boolean).length;
     const redosLeft = MAX_REDOS - redos;
+    const draftStyle = STYLES[stage.draft.style].label;
     return (
       <div>
         {picker}
@@ -203,9 +238,20 @@ export default function CreateForm({ userId, bucket, uploadsLeft, dailyLimit }: 
         <p className="mb-4 text-sm text-neutral-600 dark:text-neutral-400">Uncheck any caption you don&apos;t want posted.</p>
 
         <div className="overflow-hidden rounded-2xl border border-black/15 dark:border-white/15">
-          <div className="bg-neutral-900">
+          <div className="relative bg-neutral-900">
             <img src={stage.preview} alt="The photo you chose" className="mx-auto max-h-[22rem] w-auto object-contain" />
+            <button
+              type="button"
+              onClick={choose}
+              disabled={stage.posting}
+              className="absolute right-3 bottom-3 rounded-full bg-white/95 px-3.5 py-1.5 text-sm font-semibold text-neutral-900 shadow-md hover:bg-white disabled:opacity-50"
+            >
+              Wrong photo? Swap it
+            </button>
           </div>
+          <p className="border-b border-black/10 px-4 pt-3 pb-2 text-xs font-semibold tracking-wide text-neutral-500 uppercase dark:border-white/10">
+            {draftStyle} captions
+          </p>
           <ul className="divide-y divide-black/10 dark:divide-white/10">
             {stage.draft.captions.map((caption, i) => {
               const on = stage.keep[i];
@@ -224,27 +270,23 @@ export default function CreateForm({ userId, bucket, uploadsLeft, dailyLimit }: 
           </ul>
         </div>
 
-        <div className="mt-4 flex flex-wrap gap-2.5">
-          <button type="button" onClick={post} disabled={!kept || stage.posting} className={`${go} w-full sm:w-auto`}>
-            {stage.posting ? "Posting…" : kept ? `Post ${kept === 1 ? "1 caption" : `${kept} captions`}` : "Keep at least one"}
+        <button type="button" onClick={post} disabled={!kept || stage.posting} className={`${go} mt-4 w-full sm:w-auto`}>
+          {stage.posting ? "Posting…" : kept ? `Post ${kept === 1 ? "1 caption" : `${kept} captions`}` : "Keep at least one"}
+        </button>
+
+        <div className="mt-6 rounded-2xl border border-black/10 p-4 dark:border-white/10">
+          <p className="mb-2 text-sm font-semibold">Not feeling these? Try a different style</p>
+          <StylePicker value={style} onChange={setStyle} disabled={stage.posting || redosLeft <= 0} />
+          <button type="button" onClick={redo} disabled={stage.posting || redosLeft <= 0} className={`${secondary} mt-3 w-full sm:w-auto`}>
+            New {styleLabel}captions
           </button>
-          <button
-            type="button"
-            onClick={redo}
-            disabled={stage.posting || redosLeft <= 0}
-            title={redosLeft > 0 ? `${redosLeft} left for this photo` : "No more new captions for this photo"}
-            className={`${secondary} flex-1 sm:flex-none`}
-          >
-            New captions
-          </button>
-          <button type="button" onClick={choose} disabled={stage.posting} className={`${secondary} flex-1 sm:flex-none`}>
-            Wrong photo
-          </button>
+          <p className="mt-2.5 text-xs text-neutral-500">
+            {redosLeft > 0
+              ? `${redosLeft === 1 ? "1 more new set" : `${redosLeft} more new sets`} for this photo. Doesn't use up a daily photo.`
+              : "That's the last new set for this photo."}{" "}
+            Nothing is saved until you post.
+          </p>
         </div>
-        <p className="mt-3 text-sm text-neutral-500">
-          Nothing is saved until you post.{" "}
-          {redosLeft > 0 ? `You can ask for new captions ${redosLeft === 1 ? "once more" : `${redosLeft} more times`}.` : "That's the last set of new captions for this photo."}
-        </p>
         {errorLine}
       </div>
     );
@@ -291,19 +333,18 @@ export default function CreateForm({ userId, bucket, uploadsLeft, dailyLimit }: 
       {stage.name === "done" && (
         <>
           <p className="mt-4 text-sm text-neutral-600 dark:text-neutral-400">
-            Posted. {stage.captions.length === 1 ? "This caption is" : `These ${stage.captions.length} captions are`} now in everyone&apos;s feed.
+            Posted. {stage.captions.length === 1 ? "This caption is" : `These ${stage.captions.length} captions are`} now in everyone&apos;s
+            feed. You&apos;ll see new votes on the Mine tab.
           </p>
           <div className="mt-3 flex flex-wrap gap-3">
-            <Link href="/captions" className={primary}>
-              Go vote
+            <Link href="/mine" className={primary}>
+              See your photos
             </Link>
             <button type="button" onClick={choose} disabled={left <= 0} className={secondary}>
               Post another photo
             </button>
           </div>
-          <p className="mt-3 text-sm text-neutral-500">
-            {left} of {dailyLimit} photos left today.
-          </p>
+          {usageNote}
         </>
       )}
 

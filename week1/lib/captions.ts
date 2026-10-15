@@ -53,8 +53,59 @@ export async function countRecentUploads(userId: string): Promise<number> {
   return count ?? 0;
 }
 
+/**
+ * The daily limit counts photos the AI has captioned in the last 24 hours, posted or not,
+ * so deleting a post doesn't hand back a free AI call. Each one frees up 24 hours after it was made.
+ */
+export async function getDailyUsage(userId: string): Promise<{ used: number; nextFreeAt: string | null }> {
+  const supabase = await getSupabase();
+  const since = new Date(Date.now() - 24 * 3600_000).toISOString();
+  const { data, error } = await supabase
+    .from("caption_drafts")
+    .select("created_at")
+    .eq("user_id", userId)
+    .gte("created_at", since)
+    .order("created_at", { ascending: true });
+  if (error) return { used: await countRecentUploads(userId), nextFreeAt: null }; // week5 SQL not run yet
+  const oldest = data?.[0]?.created_at;
+  return {
+    used: data?.length ?? 0,
+    nextFreeAt: oldest ? new Date(new Date(oldest).getTime() + 24 * 3600_000).toISOString() : null,
+  };
+}
+
+/** Where each of these captions currently ranks on Top (today and all time), if it's in the top 24. */
+export async function getTopRanks(captionIds: number[]): Promise<Map<number, { day?: number; all?: number }>> {
+  const ranks = new Map<number, { day?: number; all?: number }>();
+  if (!captionIds.length) return ranks;
+  const wanted = new Set(captionIds);
+  const [day, all] = await Promise.all([getTopCaptions("day"), getTopCaptions("all")]);
+  day.captions.forEach((c, i) => wanted.has(c.id) && ranks.set(c.id, { ...ranks.get(c.id), day: i + 1 }));
+  all.captions.forEach((c, i) => wanted.has(c.id) && ranks.set(c.id, { ...ranks.get(c.id), all: i + 1 }));
+  return ranks;
+}
+
+export type Activity = {
+  caption_id: number;
+  content: string;
+  image_url: string;
+  new_up: number;
+  new_down: number;
+  upvotes: number;
+  downvotes: number;
+  score: number;
+  latest: string;
+};
+
+/** New votes from other people on the current user's captions since they last opened Mine. */
+export async function getActivity(): Promise<Activity[]> {
+  const supabase = await getSupabase();
+  const { data, error } = await supabase.rpc("my_activity");
+  return error ? [] : ((data ?? []) as Activity[]);
+}
+
 /** The user's own photos, newest first, each with its captions and how they're scoring. */
-export async function getMyUploads(userId: string, limit = 12): Promise<Upload[]> {
+export async function getMyUploads(userId: string, limit = 30): Promise<Upload[]> {
   const supabase = await getSupabase();
   const { data: images } = await supabase
     .from("images")

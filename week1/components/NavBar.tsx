@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { getActivity } from "@/lib/captions";
 import { avatarFor, getSession } from "@/lib/profile";
 import Avatar from "./Avatar";
 import NavLinks from "./NavLinks";
@@ -6,6 +7,7 @@ import NavLinks from "./NavLinks";
 // Styled after a subway sign: black strip, white type, one thin rule along the top.
 export default async function NavBar() {
   const { user, profile } = await getSession();
+  const hasNew = user ? (await getActivity()).length > 0 : false;
   const name = [profile?.first_name, profile?.last_name].filter(Boolean).join(" ") || user?.email || "";
 
   return (
@@ -19,7 +21,7 @@ export default async function NavBar() {
         </Link>
         {user ? (
           <div className="flex items-center gap-4 text-sm sm:gap-6">
-            <NavLinks />
+            <NavLinks hasNew={hasNew} />
             <Link href="/profile" aria-label="Your profile" className="flex items-center gap-2 rounded-full outline-offset-2">
               <Avatar src={avatarFor(user, profile)} name={name} size={28} />
             </Link>

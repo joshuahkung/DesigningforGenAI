@@ -1,5 +1,6 @@
 import Link from "next/link";
 import CaptionPhoto from "@/components/CaptionPhoto";
+import ScoreLabel from "@/components/ScoreLabel";
 import { RANGES, getTopCaptions, type Range } from "@/lib/captions";
 import { requireCompleteProfile } from "@/lib/profile";
 
@@ -16,7 +17,7 @@ export default async function TopPage({ searchParams }: { searchParams: Promise<
       <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Top captions</h1>
-          <p className="text-neutral-600 dark:text-neutral-400">Ranked by votes from everyone signed in.</p>
+          <p className="text-neutral-600 dark:text-neutral-400">Ranked by score: funny votes minus not-funny votes.</p>
         </div>
         <nav aria-label="Time range" className="flex rounded-full border border-black/15 p-1 text-sm dark:border-white/20">
           {(Object.keys(RANGES) as Range[]).map((key) => (
@@ -43,7 +44,7 @@ export default async function TopPage({ searchParams }: { searchParams: Promise<
           <h2 className="mb-2 text-xl font-bold tracking-tight">
             {range === "all" ? "No caption has been upvoted yet." : `Nothing ranked ${range === "day" ? "today" : "this week"} yet.`}
           </h2>
-          <p className="mb-5 text-neutral-600 dark:text-neutral-400">A caption shows up here once it has more upvotes than downvotes.</p>
+          <p className="mb-5 text-neutral-600 dark:text-neutral-400">A caption shows up here once it has more funny votes than not-funny votes.</p>
           <Link href="/captions" className="rounded-full bg-neutral-900 px-5 py-2.5 text-sm font-medium text-white dark:bg-white dark:text-neutral-900">
             Go vote
           </Link>
@@ -61,10 +62,8 @@ export default async function TopPage({ searchParams }: { searchParams: Promise<
                   </span>
                   <p className="min-h-[4.25rem] flex-1 text-lg font-bold leading-snug tracking-tight">{c.content}</p>
                 </div>
-                <div className="mt-auto flex items-center justify-between pt-3 text-sm text-neutral-400">
-                  <p className="tabular-nums">
-                    <span className="font-bold text-white">+{c.score}</span> from {c.upvotes} up, {c.downvotes} down
-                  </p>
+                <div className="mt-auto flex flex-wrap items-center justify-between gap-2 pt-3 text-sm text-neutral-400">
+                  <ScoreLabel up={c.upvotes} down={c.downvotes} dark />
                   {c.my_vote && <p>You said {c.my_vote === 1 ? "funny" : "not funny"}</p>}
                 </div>
               </div>

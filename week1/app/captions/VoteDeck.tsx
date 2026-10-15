@@ -211,12 +211,12 @@ export default function VoteDeck({ initial }: { initial: FeedCaption[] }) {
       <p aria-live="polite" className="mt-3 h-5 text-center text-sm text-neutral-500">
         {notice?.kind === "saved" && (
           <>
-            Saved. That one is at{" "}
+            Saved. That caption&apos;s{" "}
             <span className="font-semibold tabular-nums text-foreground">
-              {notice.upvotes - notice.downvotes > 0 ? "+" : ""}
+              score is {notice.upvotes - notice.downvotes > 0 ? "+" : ""}
               {notice.upvotes - notice.downvotes}
-            </span>{" "}
-            ({notice.upvotes} up, {notice.downvotes} down).
+            </span>
+            : {notice.upvotes} funny · {notice.downvotes} not funny.
           </>
         )}
         {notice?.kind === "error" && (
