@@ -57,7 +57,7 @@ export default async function VotesPage({ searchParams }: { searchParams: Promis
                   <td className="px-4 py-2.5 whitespace-nowrap">{displayName(byId.get(x.user_id))}</td>
                   <td className="max-w-md px-4 py-2.5">{c?.content ?? <span className="text-neutral-500">(deleted)</span>}</td>
                   <td className="px-4 py-2.5 whitespace-nowrap text-neutral-400">{c ? displayName(byId.get(c.user_id)) : "—"}</td>
-                  <td className="px-4 py-2.5">
+                  <td className="px-4 py-2.5 whitespace-nowrap">
                     {x.value === 1 ? (
                       <span className="rounded bg-up px-2 py-0.5 text-xs font-semibold text-white">Funny</span>
                     ) : (

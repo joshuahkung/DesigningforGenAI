@@ -41,15 +41,16 @@ export function CaptionEditor({ id, content }: { id: number; content: string }) 
   return (
     <div className="min-w-0 flex-1">
       <div className="flex flex-wrap items-center gap-2">
-        <form action={save} className="flex min-w-0 flex-1 gap-2">
+        <form action={save} className="flex min-w-0 flex-1 items-start gap-2">
           <input type="hidden" name="id" value={id} />
-          <input
+          <textarea
             name="content"
             value={text}
-            onChange={(e) => setText(e.target.value)}
+            onChange={(e) => setText(e.target.value.replace(/\n/g, " "))}
             maxLength={300}
+            rows={1}
             aria-label="Caption text"
-            className="min-w-0 flex-1 rounded border border-transparent bg-sign px-2.5 py-1.5 font-semibold text-white outline-none hover:border-white/15 focus:border-white/40"
+            className="min-w-0 flex-1 resize-none rounded border border-transparent bg-sign px-2.5 py-1.5 font-semibold text-white outline-none [field-sizing:content] hover:border-white/15 focus:border-white/40"
           />
           {dirty && (
             <button disabled={saving} className="rounded bg-white px-2.5 py-1 text-xs font-semibold text-black disabled:opacity-60">

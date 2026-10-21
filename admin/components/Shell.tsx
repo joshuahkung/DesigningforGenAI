@@ -27,6 +27,7 @@ export default function Shell({ active, email, children }: { active: string; ema
           </nav>
           <div className="ml-auto flex items-center gap-3 text-xs text-neutral-500">
             <span className="hidden sm:inline">{email}</span>
+            <span className="rounded bg-white px-1.5 py-0.5 text-[10px] font-bold tracking-wide text-black">SUPERADMIN</span>
             <form action="/auth/signout" method="post">
               <button className="rounded border border-white/15 px-2.5 py-1 text-neutral-300 hover:bg-white/5">Sign out</button>
             </form>

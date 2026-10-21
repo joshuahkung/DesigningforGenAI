@@ -48,6 +48,8 @@ export default async function Overview() {
     })
     .filter((c) => c.n > 0)
     .sort((a, b) => b.notRate - a.notRate);
+  const selfVotes = votes.filter((v) => captionById.get(v.caption_id)?.user_id === v.user_id);
+  const selfFunny = selfVotes.filter((v) => v.value === 1).length;
   const toughest = critics[0];
   const kindest = critics[critics.length - 1];
 
@@ -138,10 +140,17 @@ export default async function Overview() {
                   {captions.map((c) => {
                     const own = c.user_id === p.id;
                     const v = voteKey.get(`${p.id}:${c.id}`);
-                    const cls = own ? "bg-white/5 text-neutral-600" : v === 1 ? "bg-up text-white" : v === -1 ? "bg-down text-white" : "bg-white/[0.06] text-neutral-600";
+                    const fill = v === 1 ? "bg-up text-white" : v === -1 ? "bg-down text-white" : "bg-white/[0.06] text-neutral-600";
+                    const ring = own ? "outline-2 -outline-offset-2 outline-dashed outline-white/70" : "";
+                    const label = v === 1 ? "↑" : v === -1 ? "↓" : own ? "own" : "–";
+                    const what = v === 1 ? "funny" : v === -1 ? "not funny" : "no vote";
                     return (
-                      <td key={c.id} className={`h-8 w-9 rounded-sm text-center ${cls}`} title={`${displayName(p)} on "${c.content}"`}>
-                        {own ? "own" : v === 1 ? "↑" : v === -1 ? "↓" : "–"}
+                      <td
+                        key={c.id}
+                        className={`h-8 w-9 rounded-sm text-center ${fill} ${ring}`}
+                        title={`${displayName(p)} on ${own ? "their own caption" : "caption"} "${c.content}": ${what}`}
+                      >
+                        {label}
                       </td>
                     );
                   })}
@@ -152,12 +161,18 @@ export default async function Overview() {
         </div>
         <div className="mt-4 flex flex-wrap gap-x-6 gap-y-2 text-sm text-neutral-400">
           <span>
-            <span className="mr-1 inline-block h-2.5 w-2.5 rounded-sm bg-up" />funny <span className="mx-1 ml-3 inline-block h-2.5 w-2.5 rounded-sm bg-down" />not funny · own = their caption · – = hasn&apos;t voted
+            <span className="mr-1 inline-block h-2.5 w-2.5 rounded-sm bg-up" />funny <span className="mx-1 ml-3 inline-block h-2.5 w-2.5 rounded-sm bg-down" />not funny · – = hasn&apos;t voted ·{" "}
+            <span className="mx-1 inline-block h-2.5 w-2.5 rounded-sm outline-1 outline-dashed outline-white/70" />dashed = their own caption
           </span>
           {toughest && critics.length > 1 && (
             <span>
               Toughest critic: <b className="text-neutral-200">{displayName(toughest.p)}</b> ({toughest.notRate}% not funny) · Easiest crowd:{" "}
               <b className="text-neutral-200">{displayName(kindest.p)}</b> ({kindest.notRate}%)
+            </span>
+          )}
+          {selfVotes.length > 0 && (
+            <span>
+              Self-votes: <b className="text-neutral-200">{selfVotes.length}</b> of {votes.length} votes were on the voter&apos;s own caption ({pct(selfFunny, selfVotes.length)}% funny)
             </span>
           )}
         </div>
