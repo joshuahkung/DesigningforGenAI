@@ -1,0 +1,25 @@
+import { createServerClient } from "@supabase/ssr";
+import { type NextRequest, NextResponse } from "next/server";
+
+export async function POST(request: NextRequest) {
+  const response = NextResponse.redirect(new URL("/login", request.url), { status: 303 });
+
+  const supabase = createServerClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!, {
+    cookies: {
+      getAll() {
+        return request.cookies.getAll();
+      },
+      setAll(cookiesToSet) {
+        cookiesToSet.forEach(({ name, value, options }) => response.cookies.set(name, value, options));
+      },
+    },
+  });
+  await supabase.auth.signOut();
+
+  request.cookies
+    .getAll()
+    .filter((c) => c.name.startsWith("sb-"))
+    .forEach((c) => response.cookies.set(c.name, "", { path: "/", maxAge: 0 }));
+  response.headers.set("Cache-Control", "no-store");
+  return response;
+}
